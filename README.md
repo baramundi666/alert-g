@@ -28,7 +28,11 @@
 
 
 ## 1. Introduction <a name="introduction"></a>
+Modern information systems, built on microservices architectures and orchestrated by the Kubernetes platform, generate an unprecedented volume of diagnostic data. In an era of dynamic scaling and Continuous Deployment (CI/CD), traditional monitoring approaches based on static dashboards are becoming insufficient. The primary challenge is no longer the collection of data itself, but rather its correlation and rapid interpretation during critical incidents.
 
+There is a vital need to reduce the Mean Time To Recovery (MTTR), especially in distributed environments where a single component failure can trigger a domino effect across the entire cluster. To date, diagnostic tools have required administrators to be proficient in specialized query languages (such as PromQL for Prometheus) and to manually trace complex dependencies between services.
+
+This project presents a modern approach to Observability, where the monitoring process is enhanced by Large Language Models (LLM). By leveraging the Model Context Protocol (MCP), we create an interface that allows AI models to interact directly with real-time operational data. The goal of this project is to demonstrate that integrating monitoring systems (Grafana Cloud) with intelligent agents allows for the automated analysis of root causes and dynamic environment configuration using natural language. This transition shifts the role of the system administrator from a manual dashboard analyst to a high-level AI operator.
 ## 2. Theoretical background/ technology stack <a name="theoretical-background"></a>
 k8s -  mini kube/ AWS, opentelemetry/ prometheus, MCP, graphana (graphana cloud/ graphana hosted locally), graphana observability, "graphana assistant" (?), LLM
 
