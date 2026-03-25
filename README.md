@@ -64,12 +64,22 @@ The integration of these technologies enables not only passive monitoring but al
 The goal of the case study is to demonstrate an intelligent alert management system enhanced with AI capabilities using Grafana MCP integration.
 
 ### 3.1 Application <a name="application"></a>
-The system is based on the **Sock Shop** microservices demo application, which simulates a real-world e-commerce platform. It consists of multiple independent services such as frontend, catalog, cart, user, and payment services.
+The system is based on the **Online Boutique**, a cloud-first microservices demo application. The application is a web-based e-commerce app where users can browse items, add them to the cart, and purchase them. 
 
-The application generates:
-- HTTP traffic between services  
-- user interactions (browsing, adding to cart, checkout)  
-- controlled failure scenarios (service downtime, latency increase)  
+It consists of:
+| Service                                              | Language      | Description                                                                                                                       |
+| ---------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| [frontend](/src/frontend)                           | Go            | Exposes an HTTP server to serve the website. Does not require signup/login and generates session IDs for all users automatically. |
+| [cartservice](/src/cartservice)                     | C#            | Stores the items in the user's shopping cart in Redis and retrieves it.                                                           |
+| [productcatalogservice](/src/productcatalogservice) | Go            | Provides the list of products from a JSON file and ability to search products and get individual products.                        |
+| [currencyservice](/src/currencyservice)             | Node.js       | Converts one money amount to another currency. Uses real values fetched from European Central Bank. It's the highest QPS service. |
+| [paymentservice](/src/paymentservice)               | Node.js       | Charges the given credit card info (mock) with the given amount and returns a transaction ID.                                     |
+| [shippingservice](/src/shippingservice)             | Go            | Gives shipping cost estimates based on the shopping cart. Ships items to the given address (mock)                                 |
+| [emailservice](/src/emailservice)                   | Python        | Sends users an order confirmation email (mock).                                                                                   |
+| [checkoutservice](/src/checkoutservice)             | Go            | Retrieves user cart, prepares order and orchestrates the payment, shipping and the email notification.                            |
+| [recommendationservice](/src/recommendationservice) | Python        | Recommends other products based on what's given in the cart.                                                                      |
+| [adservice](/src/adservice)                         | Java          | Provides text ads based on given context words.                                                                                   |
+| [loadgenerator](/src/loadgenerator)                 | Python/Locust | Continuously sends requests imitating realistic user shopping flows to the frontend.                                              |
 
 ### 3.2 Observability <a name="observability"></a>
 Monitoring is implemented using Prometheus and Grafana Cloud. Metrics and logs are collected from all microservices and visualized through dashboards.
@@ -101,7 +111,7 @@ This approach transforms traditional monitoring into an **interactive and intell
 The system architecture is divided into several logical layers:
 
 **1. Data Generation Layer:**
-- Sock Shop microservices deployed in Kubernetes  
+- microservices-demo deployed in Kubernetes  
 - simulated user traffic and system events  
 
 **2. Data Collection Layer:**
@@ -124,7 +134,7 @@ The system architecture is divided into several logical layers:
   - AI assistant interface  
 
 **Architecture Flow:**
-1. Application generates metrics and logs  
+1. Application generates metrics and logs (OpenTelemetry)
 2. Prometheus collects metrics  
 3. Grafana visualizes and evaluates alert rules  
 4. Alert is triggered  
@@ -133,6 +143,9 @@ The system architecture is divided into several logical layers:
 7. User receives actionable insight  
 
 This architecture enables **real-time, AI-supported decision-making**, significantly reducing the time required to diagnose and resolve issues.
+
+Demo diagram:
+![demo-diagram](figures/demo-diagram.svg)
 
 ## 5. Case study detailed architecture <a name="case-study-detailed-architecture"></a>
 
@@ -153,4 +166,6 @@ This architecture enables **real-time, AI-supported decision-making**, significa
 ## 11. References <a name="references"></a>
 - https://grafana.com/docs/grafana/latest/alerting/
 - https://community.grafana.com/t/how-to-setup-the-grafana-mcp-server-complete-guide/155923
+- https://github.com/GoogleCloudPlatform/microservices-demo
+- https://opentelemetry.io/blog/2024/prom-and-otel/?fbclid=IwY2xjawQxDFZleHRuA2FlbQIxMQBzcnRjBmFwcF9pZAEwAAEeUGD-ltET2mkKqC03nOL0lB-CW0yogXn4buGDqk8k6qK-o_nf9y4VR7geuQg_aem_JRJw1VR18UI9ddGNxbfQKA
 

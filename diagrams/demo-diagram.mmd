@@ -1,0 +1,44 @@
+sequenceDiagram
+    autonumber
+
+    participant LG as Load Generator
+    participant MS as Microservices (Online Boutique)
+    participant PROM as Prometheus
+    participant GRAF as Grafana Cloud
+    participant ALERT as Alerting Engine
+    participant MCP as MCP Server
+    participant LLM as LLM (AI Analysis)
+    participant ADMIN as System Administrator
+
+    %% Normal operation
+    LG->>MS: Generate traffic (user requests)
+    MS->>PROM: Expose metrics (latency, errors, CPU)
+    PROM->>GRAF: Send metrics
+
+    %% Increased load
+    LG->>MS: Spike in traffic
+    MS-->>MS: Resource exhaustion / failure
+    MS->>PROM: Increased error rate (5xx), latency ↑
+
+    %% Detection
+    PROM->>GRAF: Updated metrics
+    GRAF->>ALERT: Evaluate alert rules
+    ALERT->>ALERT: Threshold exceeded
+    ALERT->>MCP: Trigger alert with context
+
+    %% AI analysis
+    MCP->>LLM: Provide metrics + logs + context
+    LLM->>MCP: Root cause analysis
+
+    Note over LLM: "High load caused<br/>cartservice latency spike<br/>possible CPU bottleneck"
+
+    MCP->>ADMIN: Explanation + recommendations
+
+    %% Human interaction
+    ADMIN->>MCP: Ask follow-up question (natural language)
+    MCP->>LLM: Retrieve deeper insights
+    LLM->>ADMIN: Suggested actions:
+    Note over LLM: - Scale service<br/>- Check resource limits<br/>- Inspect logs
+
+    %% Optional resolution
+    ADMIN->>MS: Apply fix (scale / config change)
