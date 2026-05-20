@@ -16,16 +16,15 @@
     4. [AI Integration](#ai-integration)
 4. [Case study high level architecture](#case-study-high-level-architecture)
 5. [Case study detailed architecture](#case-study-detailed-architecture)
-6. [Environment configuration description](#environment-configuration)
-7. [Installation method](#installation)
-8. [Demo deployment steps](#demo-deployment)
+6. [Environment setup & Installation](#installation)
+7. [Demo deployment steps](#demo-deployment)
     1. [Configuration set-up](#configuration-setup)
     2. [Data preparation](#data-preparation)
-9. [Demo description](#demo-description)
+8. [Demo description](#demo-description)
     1. [Execution procedure](#execution-procedure)
     2. [Results presentation](#results-presentation)
-10. [Summary - conclusions](#summary-conclusions)
-11. [References](#references)
+9. [Summary - conclusions](#summary-conclusions)
+10. [References](#references)
 
 
 ## 1. Introduction <a name="introduction"></a>
@@ -295,21 +294,174 @@ The proposed architecture introduces several important system-level properties:
 
 A key design decision is the introduction of MCP as an intermediary layer, which ensures that the LLM does not directly interact with raw observability systems, but instead operates on curated and structured diagnostic context.
 
-## 6. Environment configuration description <a name="environment-configuration"></a>
+## 6. Environment setup and installation <a name="installation"></a>
 
-## 7. Installation method <a name="installation"></a>
+The project was developed and tested on Linux using Docker Desktop with the built-in Kubernetes cluster enabled.
 
-## 8. Demo deployment steps <a name="demo-deployment"></a>
-### 8.1 Configuration set-up <a name="configuration-setup"></a>
-### 8.2 Data preparation <a name="data-preparation"></a>
+### 1. Enable Kubernetes in Docker Desktop
 
-## 9. Demo description <a name="demo-description"></a>
-### 9.1 Execution procedure <a name="execution-procedure"></a>
-### 9.2 Results presentation – All prompts used with AI models should be listed, screens from Grafana dashboard should be attached <a name="results-presentation"></a>
+Open:
 
-## 10. Summary – conclusions <a name="summary-conclusions"></a>
+```text
+Docker Desktop → Settings → Kubernetes
+```
 
-## 11. References <a name="references"></a>
+Enable the Kubernetes cluster and wait until the status changes to `Running`.
+
+Verify cluster availability:
+
+```bash
+kubectl get nodes
+```
+
+Expected result:
+
+```bash
+NAME             STATUS   ROLES           AGE   VERSION
+docker-desktop   Ready    control-plane   ...   ...
+```
+
+Verify current Kubernetes context:
+
+```bash
+kubectl config current-context
+```
+
+### 2. Clone the repository
+
+```bash
+git clone <repository-url>
+cd alert-g
+```
+
+### 3. Deploy the microservices application
+
+Deploy the Online Boutique microservices to Kubernetes:
+
+```bash
+kubectl apply -f microservices-demo/release/kubernetes-manifests.yaml
+```
+
+Verify deployment status:
+
+```bash
+kubectl get pods
+```
+
+All application pods should eventually reach the `Running` state.
+
+### 4. Connect Kubernetes to Grafana Cloud
+
+A Grafana Cloud account with an existing stack/project is required.
+
+To connect the Kubernetes cluster:
+
+1. Open Grafana Cloud
+2. Navigate to:
+
+```text
+Connections → Instrumentation Hub → Add more clusters
+```
+
+3. Follow the official Grafana installation instructions
+4. Install the generated Helm configuration into the Kubernetes cluster
+5. Additionally, enable instrumentation for the deployed services:
+   - Go to **Instrumentation Hub**
+   - Select the connected cluster
+   - Enable instrumentation (“Set up instrumentation”) for the deployed microservices
+6. Verify that logs, traces, metrics, and alerts are visible in Grafana Cloud
+
+This integration enables:
+- Loki log collection,
+- Tempo distributed tracing,
+- Kubernetes metrics and alerting,
+- MCP access to observability data.
+
+### 5. Configure Groq API access
+
+Create a Groq account and generate an API key.
+
+The API key will be used by the MCP agent as the LLM provider.
+
+### 6. Create Python virtual environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+```
+
+### 7. Install dependencies
+
+```bash
+pip install -r requirements.txt
+pip install uv
+```
+
+### 8. Configure environment variables
+
+Copy the example configuration:
+
+```bash
+cp env.example .env
+```
+
+Edit the `.env` file and provide the required credentials:
+
+```env
+GRAFANA_URL=https://your-stack.grafana.net
+GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_...
+GROQ_API_KEY=gsk_...
+
+MCP_RUNNER=uvx
+LLM_PROVIDER=groq
+```
+
+Optional datasource configuration:
+
+```env
+LOKI_DATASOURCE_UID=grafanacloud-logs
+TEMPO_DATASOURCE_UID=grafanacloud-traces
+PROM_DATASOURCE_UID=grafanacloud-prom
+```
+
+### 9. Run the MCP agent
+
+Interactive mode:
+
+```bash
+python agent.py
+```
+
+Single query:
+
+```bash
+python agent.py -q "Why is cartservice throwing 5xx errors?"
+```
+
+Automatic alert investigation:
+
+```bash
+python agent.py --triage
+```
+
+### 10. Verify installation
+
+After startup the application should:
+- connect to the Grafana MCP server,
+- detect available Grafana tools,
+- allow querying logs, traces, and alerts from Grafana Cloud.
+
+## 7. Demo deployment steps <a name="demo-deployment"></a>
+### 7.1 Configuration set-up <a name="configuration-setup"></a>
+### 7.2 Data preparation <a name="data-preparation"></a>
+
+## 8. Demo description <a name="demo-description"></a>
+### 8.1 Execution procedure <a name="execution-procedure"></a>
+### 8.2 Results presentation – All prompts used with AI models should be listed, screens from Grafana dashboard should be attached <a name="results-presentation"></a>
+
+## 9. Summary – conclusions <a name="summary-conclusions"></a>
+
+## 10. References <a name="references"></a>
 - https://grafana.com/docs/grafana/latest/alerting/
 - https://community.grafana.com/t/how-to-setup-the-grafana-mcp-server-complete-guide/155923
 - https://github.com/GoogleCloudPlatform/microservices-demo
