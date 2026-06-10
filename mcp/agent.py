@@ -2,7 +2,7 @@
 """
 Alert-G MCP Agent
 Connects Grafana Cloud (Loki logs + Tempo traces + Prometheus + Alerts)
-to a free LLM (Groq cloud or Ollama local) via the official Grafana MCP server.
+to an LLM provider (Gemini, Groq, or Ollama) via the official Grafana MCP server.
 
 Usage:
   python agent.py                  # interactive chat
@@ -14,8 +14,10 @@ import argparse
 import asyncio
 import json
 import os
+import random
+import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
@@ -35,7 +37,13 @@ console = Console()
 GRAFANA_URL   = os.getenv("GRAFANA_URL", "https://alertg.grafana.net")
 GRAFANA_TOKEN = os.getenv("GRAFANA_SERVICE_ACCOUNT_TOKEN", "") or os.getenv("GRAFANA_API_KEY", "")
 MCP_RUNNER    = os.getenv("MCP_RUNNER", "uvx").lower()       # "uvx" | "docker"
-LLM_PROVIDER  = os.getenv("LLM_PROVIDER", "groq").lower()   # "groq" | "ollama"
+LLM_PROVIDER  = os.getenv("LLM_PROVIDER", "gemini").lower() # "gemini" | "groq" | "ollama"
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash-lite")
+
+
 GROQ_API_KEY  = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL    = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 OLLAMA_URL    = os.getenv("OLLAMA_URL", "http://localhost:11434")
@@ -52,7 +60,7 @@ PROM_DS   = os.getenv("PROM_DATASOURCE_UID",   "grafanacloud-prom")
 def build_system_prompt(loki_labels: str = "") -> str:
     now_utc  = datetime.now(timezone.utc)
     now_iso  = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
-    hour_ago = now_utc.replace(hour=now_utc.hour - 1) if now_utc.hour > 0 else now_utc
+    hour_ago = now_utc - timedelta(hours=1)
     hour_ago_iso = hour_ago.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     labels_section = (
@@ -133,7 +141,6 @@ async def call_tool(session: ClientSession, name: str, args: dict) -> str:
 # ─────────────────────────────────────────────
 
 # Keywords used to select tools from whatever the MCP server actually exposes.
-# This is robust to name changes (e.g. "query_loki_logs" vs "queryLokiLogs").
 TOOL_KEYWORDS = {
     "alert", "loki", "log", "tempo", "trace",
 }
@@ -202,6 +209,268 @@ def build_tool_list(mcp_tools) -> list:
         + "[/dim]"
     )
     return chosen
+
+
+
+# ─────────────────────────────────────────────
+# Gemini agent loop
+# ─────────────────────────────────────────────
+def _gemini_safe_tool_name(name: str) -> str:
+    """
+    Gemini function names should not contain characters like '-'.
+    MCP tools can contain them, so we expose a safe alias to Gemini and map it
+    back to the real MCP tool name before calling session.call_tool(...).
+    """
+    safe = re.sub(r"[^a-zA-Z0-9_]", "_", name)
+    if not re.match(r"^[a-zA-Z_]", safe):
+        safe = f"tool_{safe}"
+    return safe[:64]
+
+
+def _gemini_schema(schema: dict | None) -> dict:
+    """Keep only the JSON Schema/OpenAPI subset Gemini function declarations handle well."""
+    if not schema:
+        return {"type": "object", "properties": {}}
+
+    allowed = {
+        "type", "properties", "required", "items", "enum",
+        "anyOf", "oneOf", "description", "format", "nullable",
+    }
+
+    def clean(node):
+        if isinstance(node, list):
+            return [clean(x) for x in node]
+        if not isinstance(node, dict):
+            return node
+
+        out = {}
+        for key, value in node.items():
+            if key not in allowed:
+                continue
+            if key == "properties" and isinstance(value, dict):
+                out[key] = {prop: clean(prop_schema) for prop, prop_schema in value.items()}
+            elif key in {"items", "anyOf", "oneOf"}:
+                out[key] = clean(value)
+            else:
+                out[key] = value
+        return out
+
+    cleaned = clean(schema)
+    if "type" not in cleaned and "properties" in cleaned:
+        cleaned["type"] = "object"
+    return cleaned or {"type": "object", "properties": {}}
+
+
+def build_gemini_tools(mcp_tools) -> tuple[list, dict[str, str]]:
+    """Build Gemini function declarations and a safe-name -> MCP-name map."""
+    declarations = []
+    name_map: dict[str, str] = {}
+    used_names: set[str] = set()
+
+    for t in mcp_tools:
+        name_lower = t.name.lower()
+        if t.name in TOOL_BLOCKLIST:
+            continue
+        if not any(kw in name_lower for kw in TOOL_KEYWORDS):
+            continue
+
+        safe_name = _gemini_safe_tool_name(t.name)
+        base_name = safe_name
+        suffix = 2
+        while safe_name in used_names:
+            safe_name = f"{base_name[:58]}_{suffix}"
+            suffix += 1
+
+        used_names.add(safe_name)
+        name_map[safe_name] = t.name
+        declarations.append({
+            "name": safe_name,
+            "description": f"MCP tool `{t.name}`. {(t.description or '')[:180]}",
+            "parameters": _gemini_schema(t.inputSchema),
+        })
+
+    console.print(
+        f"  [dim]Gemini tools selected ({len(declarations)}): "
+        + ", ".join(d["name"] for d in declarations)
+        + "[/dim]"
+    )
+    return declarations, name_map
+
+
+def _messages_to_gemini(messages: list):
+    """Convert OpenAI/Groq-style messages to Google GenAI Content objects."""
+    from google.genai import types
+
+    system_parts: list[str] = []
+    contents: list[types.Content] = []
+
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content") or ""
+
+        if role == "system":
+            system_parts.append(content)
+        elif role == "user":
+            contents.append(types.Content(role="user", parts=[types.Part(text=content)]))
+        elif role == "assistant":
+            contents.append(types.Content(role="model", parts=[types.Part(text=content)]))
+
+    return "\n\n".join(system_parts), contents
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read an integer env var safely."""
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _is_retryable_gemini_error(exc: Exception) -> bool:
+    """Return True for transient Gemini/API errors worth retrying."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {408, 429, 500, 502, 503, 504}:
+        return True
+
+    # Some SDK versions hide the status in the string representation.
+    text = str(exc).lower()
+    retryable_markers = (
+        "503",
+        "unavailable",
+        "overloaded",
+        "high demand",
+        "temporarily",
+        "rate limit",
+        "429",
+    )
+    return any(marker in text for marker in retryable_markers)
+
+
+async def _generate_gemini_with_retry(client, *, contents, config):
+    """
+    Call Gemini with retries and optional fallback model.
+
+    This prevents temporary Gemini 503/overload errors from crashing the whole
+    MCP stdio session and producing a huge ExceptionGroup traceback.
+    """
+    max_retries = max(1, _int_env("GEMINI_MAX_RETRIES", 3))
+    base_delay = max(0.2, float(os.getenv("GEMINI_RETRY_BASE_DELAY", "1.5")))
+
+    models_to_try = [GEMINI_MODEL]
+    if GEMINI_FALLBACK_MODEL and GEMINI_FALLBACK_MODEL not in models_to_try:
+        models_to_try.append(GEMINI_FALLBACK_MODEL)
+
+    last_exc: Exception | None = None
+
+    for model_index, model_name in enumerate(models_to_try):
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=config,
+                )
+                if model_name != GEMINI_MODEL:
+                    console.print(f"[dim]Used Gemini fallback model: {model_name}[/dim]")
+                return response
+            except Exception as exc:
+                last_exc = exc
+
+                if not _is_retryable_gemini_error(exc):
+                    raise
+
+                is_last_attempt_for_model = attempt == max_retries
+                has_next_model = model_index < len(models_to_try) - 1
+
+                if is_last_attempt_for_model:
+                    if has_next_model:
+                        next_model = models_to_try[model_index + 1]
+                        console.print(
+                            f"[yellow]Gemini model {model_name} is unavailable/overloaded. "
+                            f"Switching to fallback: {next_model}[/yellow]"
+                        )
+                        break
+                    raise
+
+                delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 0.35)
+                console.print(
+                    f"[yellow]Gemini temporary error on {model_name}. "
+                    f"Retry {attempt}/{max_retries} in {delay:.1f}s...[/yellow]"
+                )
+                await asyncio.sleep(delay)
+
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Gemini call failed before any request was made.")
+
+
+async def run_gemini(session: ClientSession, messages: list) -> str:
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        console.print("[red]google-genai package not installed. Run: pip install google-genai[/red]")
+        sys.exit(1)
+
+    client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else genai.Client()
+
+    mcp_tools = (await session.list_tools()).tools
+    function_declarations, name_map = build_gemini_tools(mcp_tools)
+    if not function_declarations:
+        return "No matching tools found. Check TOOL_KEYWORDS or run with --list-tools."
+
+    system_instruction, contents = _messages_to_gemini(messages)
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction or None,
+        tools=[types.Tool(function_declarations=function_declarations)],
+        max_output_tokens=1200,
+    )
+
+    for _ in range(8):
+        try:
+            response = await _generate_gemini_with_retry(
+                client,
+                contents=contents,
+                config=config,
+            )
+        except Exception as exc:
+            return (
+                "Gemini API failed after retries. The MCP connection itself is working, "
+                "but the LLM request could not be completed.\n\n"
+                f"Error: `{exc}`\n\n"
+                "Try again, or set `GEMINI_MODEL=gemini-2.5-flash-lite` in `.env`."
+            )
+
+        candidate = response.candidates[0] if response.candidates else None
+        parts = candidate.content.parts if candidate and candidate.content and candidate.content.parts else []
+        function_calls = [part.function_call for part in parts if getattr(part, "function_call", None)]
+
+        if not function_calls:
+            return response.text or ""
+
+        # Preserve the original model response. This is important for Gemini's
+        # thought signatures and function-call IDs.
+        contents.append(candidate.content)
+
+        function_response_parts = []
+        for fc in function_calls:
+            safe_name = fc.name
+            real_mcp_name = name_map.get(safe_name, safe_name)
+            args = dict(fc.args or {})
+            result_text = await call_tool(session, real_mcp_name, args)
+            function_response_parts.append(
+                # Do not pass `id=` here. Some google-genai versions
+                # do not support it and raise:
+                # TypeError: Part.from_function_response() got an unexpected keyword argument 'id'
+                types.Part.from_function_response(
+                    name=safe_name,
+                    response={"result": result_text},
+                )
+            )
+
+        contents.append(types.Content(role="user", parts=function_response_parts))
+
+    return "Reached max iterations — partial results above."
 
 
 # ─────────────────────────────────────────────
@@ -334,10 +603,11 @@ async def ask(session: ClientSession, query: str, loki_labels: str = "") -> str:
         {"role": "system", "content": build_system_prompt(loki_labels)},
         {"role": "user",   "content": query},
     ]
+    if LLM_PROVIDER == "gemini":
+        return await run_gemini(session, messages)
     if LLM_PROVIDER == "ollama":
         return await run_ollama(session, messages)
-    else:
-        return await run_groq(session, messages)
+    return await run_groq(session, messages)
 
 
 # ─────────────────────────────────────────────
@@ -381,10 +651,16 @@ async def repl(session: ClientSession, loki_labels: str = ""):
         history.append({"role": "user", "content": user_input})
         console.print("[yellow]Thinking…[/yellow]\n")
 
-        if LLM_PROVIDER == "ollama":
-            response = await run_ollama(session, history)
+        messages = [
+            {"role": "system", "content": build_system_prompt(loki_labels)},
+            *history,
+        ]
+        if LLM_PROVIDER == "gemini":
+            response = await run_gemini(session, messages)
+        elif LLM_PROVIDER == "ollama":
+            response = await run_ollama(session, messages)
         else:
-            response = await run_groq(session, history)
+            response = await run_groq(session, messages)
 
         history.append({"role": "assistant", "content": response})
         console.print("[bold green]Assistant:[/bold green]")
@@ -408,6 +684,9 @@ async def main():
     if not GRAFANA_TOKEN:
         console.print("[bold red]ERROR:[/bold red] GRAFANA_SERVICE_ACCOUNT_TOKEN is not set. See .env.example")
         sys.exit(1)
+    if LLM_PROVIDER == "gemini" and not GEMINI_API_KEY:
+        console.print("[bold red]ERROR:[/bold red] GEMINI_API_KEY or GOOGLE_API_KEY is not set. See .env.example")
+        sys.exit(1)
     if LLM_PROVIDER == "groq" and not GROQ_API_KEY:
         console.print("[bold red]ERROR:[/bold red] GROQ_API_KEY is not set. See .env.example")
         sys.exit(1)
@@ -416,15 +695,17 @@ async def main():
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_row("[cyan]Grafana[/cyan]",  GRAFANA_URL)
     table.add_row("[cyan]MCP runner[/cyan]", MCP_RUNNER.upper())
-    table.add_row("[cyan]LLM[/cyan]",      f"{LLM_PROVIDER.upper()} / {GROQ_MODEL if LLM_PROVIDER == 'groq' else OLLAMA_MODEL}")
+    model_name = {
+        "gemini": f"{GEMINI_MODEL} (fallback: {GEMINI_FALLBACK_MODEL})",
+        "groq": GROQ_MODEL,
+        "ollama": OLLAMA_MODEL,
+    }.get(LLM_PROVIDER, "unknown")
+    table.add_row("[cyan]LLM[/cyan]",      f"{LLM_PROVIDER.upper()} / {model_name}")
     table.add_row("[cyan]Loki DS[/cyan]",  LOKI_DS)
     table.add_row("[cyan]Tempo DS[/cyan]", TEMPO_DS)
     table.add_row("[cyan]Prom DS[/cyan]",  PROM_DS)
     console.print(Panel(table, title="[bold green]Alert-G MCP Agent[/bold green]", border_style="green"))
 
-    # Launch Grafana MCP server as a subprocess
-    # Option A (default): uvx  — pip install uv  then: uvx mcp-grafana
-    # Option B:           docker — docker run grafana/mcp-grafana -t stdio
     mcp_env = {
         **os.environ,
         "GRAFANA_URL":                   GRAFANA_URL,
@@ -443,7 +724,6 @@ async def main():
             ],
         )
     else:
-        # uvx (default) — install uv: https://docs.astral.sh/uv/
         server_params = StdioServerParameters(
             command="uvx",
             args=["mcp-grafana"],
@@ -455,6 +735,7 @@ async def main():
             await session.initialize()
             tools = (await session.list_tools()).tools
             active = build_tool_list(tools)
+            loki_labels = await fetch_loki_labels(session)
             console.print(f"[green]✓ MCP connected — {len(active)} tools active (from {len(tools)} total)[/green]")
 
             if args.list_tools:
@@ -463,12 +744,12 @@ async def main():
                     console.print(f"  [cyan]{t.name}[/cyan] — {(t.description or '')[:80]}")
                 console.print(f"\n[dim]Total: {len(tools)}. Add names to TOOL_KEYWORDS to include them.[/dim]")
             elif args.triage:
-                await auto_triage(session)
+                await auto_triage(session, loki_labels=loki_labels)
             elif args.query:
-                result = await ask(session, args.query)
+                result = await ask(session, args.query, loki_labels=loki_labels)
                 console.print(Markdown(result))
             else:
-                await repl(session)
+                await repl(session, loki_labels=loki_labels)
 
 
 if __name__ == "__main__":
