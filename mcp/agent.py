@@ -134,12 +134,6 @@ async def call_tool(session: ClientSession, name: str, args: dict) -> str:
         text = text[:TOOL_RESULT_MAX_CHARS] + f"\n... [truncated {len(text) - TOOL_RESULT_MAX_CHARS} chars]"
     return text
 
-
-# ─────────────────────────────────────────────
-# Tool filtering — keeps token count inside Groq free-tier limits.
-# The full server has 59 tools; we only need ~12 for SRE work.
-# ─────────────────────────────────────────────
-
 # Keywords used to select tools from whatever the MCP server actually exposes.
 TOOL_KEYWORDS = {
     "alert", "loki", "log", "tempo", "trace",
@@ -459,9 +453,6 @@ async def run_gemini(session: ClientSession, messages: list) -> str:
             args = dict(fc.args or {})
             result_text = await call_tool(session, real_mcp_name, args)
             function_response_parts.append(
-                # Do not pass `id=` here. Some google-genai versions
-                # do not support it and raise:
-                # TypeError: Part.from_function_response() got an unexpected keyword argument 'id'
                 types.Part.from_function_response(
                     name=safe_name,
                     response={"result": result_text},
