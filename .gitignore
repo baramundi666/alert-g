@@ -208,3 +208,6 @@ __marimo__/
 
 # Added manually
 **/.tool-versions
+**/.venv
+**/.DS_Store
+**/.env
