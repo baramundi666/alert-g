@@ -1,44 +1,68 @@
 sequenceDiagram
     autonumber
 
-    participant LG as Load Generator
-    participant MS as Microservices (Online Boutique)
+    participant LG   as Load Generator
+    participant MS   as Microservices
     participant PROM as Prometheus
+    participant LOKI as Loki
+    participant TEMP as Tempo
     participant GRAF as Grafana Cloud
-    participant ALERT as Alerting Engine
-    participant MCP as MCP Server
-    participant LLM as LLM (AI Analysis)
-    participant ADMIN as System Administrator
+    participant ALRT as Alerting Engine
+    participant MCP  as MCP Server
+    participant AGT  as agent_openai.py
+    participant LLM  as OpenAI LLM
+    participant ADM  as Administrator
 
-    %% Normal operation
-    LG->>MS: Generate traffic (user requests)
+    LG->>MS: Simulate user traffic
     MS->>PROM: Expose metrics (latency, errors, CPU)
-    PROM->>GRAF: Send metrics
+    MS->>LOKI: Stream application logs
+    MS->>TEMP: Emit distributed traces
+    PROM->>GRAF: Metrics scraped and stored
 
-    %% Increased load
-    LG->>MS: Spike in traffic
-    MS-->>MS: Resource exhaustion / failure
-    MS->>PROM: Increased error rate (5xx), latency ↑
+    LG->>MS: Traffic spike or fault injected
+    MS-->>MS: Service failure e.g. cartservice down
+    MS->>PROM: Increased error rate, latency spike
+    MS->>LOKI: Error log lines
 
-    %% Detection
-    PROM->>GRAF: Updated metrics
-    GRAF->>ALERT: Evaluate alert rules
-    ALERT->>ALERT: Threshold exceeded
-    ALERT->>MCP: Trigger alert with context
+    PROM->>GRAF: Updated metrics arrive
+    GRAF->>ALRT: Evaluate alert rules
+    ALRT->>ALRT: Threshold exceeded, state Firing
 
-    %% AI analysis
-    MCP->>LLM: Provide metrics + logs + context
-    LLM->>MCP: Root cause analysis
+    ADM->>AGT: python agent_openai.py --triage
+    AGT->>MCP: stdio_client.initialize()
+    MCP-->>AGT: Full tool list returned
+    AGT->>AGT: Filter to alert, loki, log, tempo, trace tools
+    AGT->>MCP: list_loki_label_names
+    MCP-->>AGT: Known labels returned
 
-    Note over LLM: "High load caused<br/>cartservice latency spike<br/>possible CPU bottleneck"
+    AGT->>LLM: System prompt + triage query + tool schemas
+    LLM->>AGT: function_call list_alert_rules
+    AGT->>MCP: list_alert_rules
+    MCP-->>AGT: Firing alerts returned
+    AGT->>LLM: Tool result appended
 
-    MCP->>ADMIN: Explanation + recommendations
+    LLM->>AGT: function_call query_loki_logs
+    AGT->>MCP: LogQL query for error logs
+    MCP-->>AGT: Error log lines with timestamps
+    AGT->>LLM: Tool result appended
 
-    %% Human interaction
-    ADMIN->>MCP: Ask follow-up question (natural language)
-    MCP->>LLM: Retrieve deeper insights
-    LLM->>ADMIN: Suggested actions:
-    Note over LLM: - Scale service<br/>- Check resource limits<br/>- Inspect logs
+    LLM->>AGT: function_call tempo_traceql_metrics_range
+    AGT->>MCP: TraceQL rate by service.name
+    MCP-->>AGT: Span-rate timeseries returned
+    AGT->>LLM: Tool result appended
 
-    %% Optional resolution
-    ADMIN->>MS: Apply fix (scale / config change)
+    LLM-->>AGT: Final analysis, no more function calls
+
+    Note over LLM,AGT: Alert Summary, Root Cause Analysis,<br/>Recommended Actions
+
+    AGT->>ADM: Print Markdown report to terminal
+
+    ADM->>ADM: Review report and Grafana dashboard
+    ADM->>MS: kubectl rollout restart deployment
+    MS->>PROM: Error rate drops, latency recovers
+    PROM->>GRAF: Metrics updated
+    ALRT->>ALRT: Alert resolves, state Normal
+
+    ADM->>AGT: Follow-up query - are all services healthy
+    AGT->>LLM: Re-query with updated context
+    LLM-->>ADM: All alerts resolved, traffic nominal
