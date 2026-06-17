@@ -1,0 +1,89 @@
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant ADM  as Administrator
+    participant AGT  as agent_openai.py
+    participant LLM  as OpenAI Responses API
+    participant MCP  as mcp-grafana MCP Server
+    participant GRAF as Grafana Cloud
+    participant ALRT as Grafana Alerting
+    participant LOKI as Loki Logs
+    participant TEMP as Tempo Traces
+    participant K8S  as Kubernetes / Online Boutique
+
+    rect rgb(245, 245, 245)
+        Note over K8S,GRAF: Application is deployed with Skaffold and emits telemetry
+        ADM->>K8S: skaffold dev / skaffold run
+        K8S->>GRAF: Metrics, logs and traces are collected
+        GRAF->>ALRT: Alert rules are evaluated
+        GRAF->>LOKI: Logs are available for querying
+        GRAF->>TEMP: Traces are available for querying
+    end
+
+    rect rgb(235, 245, 255)
+        Note over ADM,ALRT: Test 1 — auto-triage with no active alerts
+
+        ADM->>AGT: python agent_openai.py --triage
+        AGT->>MCP: Start MCP server via uvx mcp-grafana
+        MCP->>GRAF: Authenticate with Grafana service account token
+        AGT->>MCP: initialize MCP session
+        AGT->>MCP: list_tools
+        MCP-->>AGT: Grafana MCP tools returned
+        AGT->>AGT: Filter tools: alert, loki, log, tempo, trace
+        AGT->>MCP: list_loki_label_names
+        MCP->>LOKI: Fetch available Loki labels
+        LOKI-->>MCP: Label names returned
+        MCP-->>AGT: Known Loki labels
+
+        AGT->>LLM: System prompt + triage query + MCP tool schemas
+        LLM-->>AGT: function_call: alerting_manage_rules
+        AGT->>MCP: alerting_manage_rules(states=firing,pending)
+        MCP->>ALRT: Query firing and pending alerts
+        ALRT-->>MCP: No firing or pending alerts
+        MCP-->>AGT: Empty alert result
+        AGT->>LLM: function_call_output with alert result
+
+        LLM-->>AGT: Final answer: no active alerts to investigate
+        AGT-->>ADM: Print triage result in terminal
+    end
+
+    rect rgb(245, 255, 245)
+        Note over ADM,LOKI: Test 2 — targeted question about kube-apiserver errors
+
+        ADM->>AGT: python agent_openai.py -q "Analyze kube-apiserver logs for errors"
+        AGT->>LLM: User question + system prompt + MCP tool schemas
+
+        LLM-->>AGT: function_call: list_loki_label_names
+        AGT->>MCP: list_loki_label_names(datasourceUid=grafanacloud-logs)
+        MCP->>LOKI: Fetch Loki label names
+        LOKI-->>MCP: Labels such as job, container, pod, namespace
+        MCP-->>AGT: Label names
+        AGT->>LLM: function_call_output with labels
+
+        LLM-->>AGT: function_call: list_loki_label_values
+        AGT->>MCP: list_loki_label_values(labelName=job/container/pod)
+        MCP->>LOKI: Search label values related to kube-apiserver
+        LOKI-->>MCP: Matching Kubernetes label values
+        MCP-->>AGT: Label values
+        AGT->>LLM: function_call_output with label values
+
+        LLM-->>AGT: function_call: query_loki_logs
+        AGT->>MCP: query_loki_logs(LogQL for kube-apiserver error-like logs)
+        MCP->>LOKI: Query logs containing error, failed, denied, timeout, panic
+        LOKI-->>MCP: kube-apiserver error log lines
+        MCP-->>AGT: Error logs with timestamps and labels
+        AGT->>LLM: function_call_output with log results
+
+        LLM-->>AGT: Final summary of recurring error patterns
+        AGT-->>ADM: Print log analysis in terminal
+    end
+
+    rect rgb(255, 250, 235)
+        Note over ADM,GRAF: Manual verification in Grafana UI
+        ADM->>GRAF: Open Grafana Explore
+        GRAF->>LOKI: Display kube-apiserver logs
+        LOKI-->>GRAF: Error logs visible in dashboard
+        ADM->>ADM: Compare Grafana logs with agent summary
+    end
+```

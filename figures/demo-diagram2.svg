@@ -1,0 +1,125 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img" aria-label="OpenAI MCP agent and Grafana observability flow">
+  <defs>
+    <style>
+      .bg { fill: #ffffff; }
+      .box { fill: #f8fafc; stroke: #334155; stroke-width: 1.8; rx: 12; }
+      .box-blue { fill: #eff6ff; stroke: #2563eb; stroke-width: 1.8; rx: 12; }
+      .box-green { fill: #ecfdf5; stroke: #059669; stroke-width: 1.8; rx: 12; }
+      .box-orange { fill: #fff7ed; stroke: #ea580c; stroke-width: 1.8; rx: 12; }
+      .box-purple { fill: #f5f3ff; stroke: #7c3aed; stroke-width: 1.8; rx: 12; }
+      .box-red { fill: #fef2f2; stroke: #dc2626; stroke-width: 1.8; rx: 12; }
+      .title { font-family: Arial, sans-serif; font-size: 22px; font-weight: 700; fill: #0f172a; }
+      .label { font-family: Arial, sans-serif; font-size: 16px; font-weight: 700; fill: #0f172a; }
+      .text { font-family: Arial, sans-serif; font-size: 13px; fill: #334155; }
+      .small { font-family: Arial, sans-serif; font-size: 12px; fill: #475569; }
+      .arrow { stroke: #334155; stroke-width: 2; fill: none; marker-end: url(#arrowhead); }
+      .arrow-blue { stroke: #2563eb; stroke-width: 2.4; fill: none; marker-end: url(#arrowhead-blue); }
+      .arrow-green { stroke: #059669; stroke-width: 2.4; fill: none; marker-end: url(#arrowhead-green); }
+      .dash { stroke-dasharray: 7 6; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#334155"/>
+    </marker>
+    <marker id="arrowhead-blue" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#059669"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="760"/>
+  <text class="title" x="40" y="48">Alert-G Demo Flow — OpenAI MCP Agent + Grafana Cloud</text>
+  <text class="small" x="40" y="72">Actual implemented flow: CLI agent exposes Grafana MCP tools to OpenAI, executes tool calls, and summarizes Alerting/Loki/Tempo evidence.</text>
+
+  <!-- Data generation and deployment -->
+  <rect class="box-orange" x="55" y="125" width="250" height="120" rx="12"/>
+  <text class="label" x="80" y="155">Skaffold Deployment</text>
+  <text class="text" x="80" y="181">skaffold run / skaffold dev</text>
+  <text class="text" x="80" y="203">deploys Online Boutique</text>
+  <text class="text" x="80" y="225">to Kubernetes</text>
+
+  <rect class="box-green" x="55" y="300" width="250" height="145" rx="12"/>
+  <text class="label" x="80" y="330">Kubernetes Cluster</text>
+  <text class="text" x="80" y="356">Online Boutique services</text>
+  <text class="text" x="80" y="378">loadgenerator traffic</text>
+  <text class="text" x="80" y="400">kube-apiserver logs</text>
+  <text class="text" x="80" y="422">OpenTelemetry signals</text>
+
+  <!-- Grafana layer -->
+  <rect class="box-purple" x="400" y="125" width="300" height="320" rx="12"/>
+  <text class="label" x="425" y="155">Grafana Cloud</text>
+
+  <rect class="box" x="430" y="185" width="240" height="58" rx="10"/>
+  <text class="label" x="455" y="209">Grafana Alerting</text>
+  <text class="small" x="455" y="229">firing / pending alert state</text>
+
+  <rect class="box" x="430" y="265" width="240" height="58" rx="10"/>
+  <text class="label" x="455" y="289">Loki</text>
+  <text class="small" x="455" y="309">logs queried with LogQL</text>
+
+  <rect class="box" x="430" y="345" width="240" height="58" rx="10"/>
+  <text class="label" x="455" y="369">Tempo</text>
+  <text class="small" x="455" y="389">traces queried with TraceQL</text>
+
+  <!-- MCP server -->
+  <rect class="box-blue" x="805" y="205" width="250" height="160" rx="12"/>
+  <text class="label" x="830" y="235">mcp-grafana</text>
+  <text class="text" x="830" y="261">official Grafana MCP server</text>
+  <text class="text" x="830" y="283">runs via uvx or Docker</text>
+  <text class="text" x="830" y="305">stdio transport</text>
+  <text class="text" x="830" y="327">exposes Alerting/Loki/Tempo tools</text>
+
+  <!-- Agent and OpenAI -->
+  <rect class="box-red" x="805" y="465" width="250" height="145" rx="12"/>
+  <text class="label" x="830" y="495">agent_openai.py</text>
+  <text class="text" x="830" y="521">loads .env</text>
+  <text class="text" x="830" y="543">lists MCP tools</text>
+  <text class="text" x="830" y="565">executes tool calls</text>
+  <text class="text" x="830" y="587">prints Markdown answer</text>
+
+  <rect class="box-blue" x="565" y="545" width="200" height="105" rx="12"/>
+  <text class="label" x="590" y="575">OpenAI</text>
+  <text class="text" x="590" y="601">Responses API</text>
+  <text class="text" x="590" y="623">GPT model selects tools</text>
+
+  <rect class="box" x="250" y="545" width="220" height="105" rx="12"/>
+  <text class="label" x="275" y="575">User Terminal</text>
+  <text class="text" x="275" y="601">--triage</text>
+  <text class="text" x="275" y="623">or -q natural language query</text>
+
+  <!-- Arrows -->
+  <path class="arrow-green" d="M180 245 L180 292"/>
+  <text class="small" x="198" y="274">deploys</text>
+
+  <path class="arrow-green" d="M305 370 C350 370 365 295 400 295"/>
+  <text class="small" x="325" y="340">metrics / logs / traces</text>
+
+  <path class="arrow-blue" d="M700 285 L795 285"/>
+  <text class="small" x="720" y="268">Grafana API</text>
+
+  <path class="arrow-blue" d="M930 365 L930 455"/>
+  <text class="small" x="947" y="413">MCP stdio</text>
+
+  <path class="arrow-blue" d="M805 535 L775 598"/>
+  <text class="small" x="715" y="548">tools + results</text>
+
+  <path class="arrow-blue" d="M565 598 L480 598"/>
+  <text class="small" x="502" y="580">final answer</text>
+
+  <path class="arrow-blue" d="M470 598 L555 598"/>
+  <text class="small" x="485" y="625">query</text>
+
+  <path class="arrow" d="M1055 525 C1130 525 1130 285 1065 285"/>
+  <text class="small" x="1090" y="410">call MCP tool</text>
+
+  <path class="arrow dash" d="M430 214 C360 214 340 185 315 185"/>
+  <text class="small" x="320" y="166">--triage checks active alerts</text>
+
+  <path class="arrow dash" d="M430 294 C360 294 340 365 315 385"/>
+  <text class="small" x="318" y="317">targeted log question</text>
+
+  <!-- Step summary -->
+  <rect class="box" x="55" y="680" width="1170" height="52" rx="10"/>
+  <text class="text" x="80" y="704">Demo validation: --triage calls Grafana Alerting and reports no active firing/pending alerts; targeted kube-apiserver question calls Loki tools and summarizes discovered error logs.</text>
+</svg>
