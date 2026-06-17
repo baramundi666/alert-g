@@ -325,190 +325,160 @@ rich>=13.0.0
 ```bash
 # List all available MCP tools (smoke test — no query is sent to the LLM)
 python agent_openai.py --list-tools
-
-# Expected output example:
-# ✓ MCP connected — 12 tools active (from 47 total)
-# list_alert_rules        — List Grafana alert rules
-# query_loki_logs         — Query Loki for log lines
-# list_loki_label_names   — List available Loki stream labels
-# ...
 ```
+
 
 ---
 
 ## 8. Demo Deployment Steps
 
-### 8.1 Configuration Set-up
+The demo application is deployed with **Skaffold**, which is the current deployment method used for Online Boutique. Skaffold builds and applies the Kubernetes manifests as one repeatable workflow, so the demo does not require manually applying individual manifest directories.
+
+### 8.1 Prepare the Environment
+
+Make sure the following tools are available locally:
+
+- `kubectl` configured for the target Kubernetes cluster
+- `skaffold` installed
+- access to the Grafana Cloud instance configured in `.env`
+- OpenAI API key configured in `.env`
+
+Copy and edit the environment file for the MCP agent:
 
 ```bash
 cp .env.example .env
-# Edit .env with your Grafana URL, tokens, and OpenAI key
+# Fill in Grafana URL, Grafana service-account token, datasource UIDs and OpenAI key
 ```
 
-Ensure Grafana Alerting rules are configured for the Online Boutique services. Recommended alert rules:
+Minimal required values:
 
-| Alert | PromQL / Condition |
-|---|---|
-| High HTTP error rate | `rate(http_requests_total{status=~"5.."}[1m]) > 0.05` |
-| High p99 latency | `histogram_quantile(0.99, ...) > 2` |
-| Pod not ready | `kube_pod_status_ready == 0` |
-| CPU throttling | Throttled CPU ratio > 50 % |
+```dotenv
+GRAFANA_URL=https://alertg.grafana.net
+GRAFANA_SERVICE_ACCOUNT_TOKEN=glsa_your_token_here
+LOKI_DATASOURCE_UID=grafanacloud-logs
+TEMPO_DATASOURCE_UID=grafanacloud-traces
+MCP_RUNNER=uvx
+OPENAI_API_KEY=sk-proj_your_openai_key_here
+OPENAI_MODEL=gpt-5.4-mini
+```
 
-### 8.2 Deploy Online Boutique (Kubernetes)
+### 8.2 Deploy Online Boutique with Skaffold
+
+From the Online Boutique project directory, run:
 
 ```bash
-# Apply all service manifests
-kubectl apply -f kubernetes-manifests/
+skaffold run
+```
 
-# Verify all pods are running
-kubectl get pods -n default
+Verify that the workloads are running:
 
-# Port-forward the frontend for local browser access
+```bash
+kubectl get pods
+kubectl get services
+```
+
+Expose the frontend locally if needed:
+
+```bash
 kubectl port-forward svc/frontend 8080:80
 ```
 
-The load generator starts automatically and produces continuous traffic. Metrics will appear in Prometheus/Grafana within ~1 minute; logs in Loki and traces in Tempo within ~2 minutes.
+Then open:
 
-### 8.3 Inject a Fault
-
-To trigger alerts and produce interesting log/trace data for the demo:
-
-```bash
-# Scale cartservice to zero — causes checkout 5xx failures
-kubectl scale deployment cartservice --replicas=0
-
-# Wait ~2 minutes for alert rules to fire, then restore
-kubectl scale deployment cartservice --replicas=1
+```text
+http://localhost:8080
 ```
 
----
+For an iterative development workflow, use:
+
+```bash
+skaffold dev
+```
+
+This keeps the application running and automatically redeploys changes.
+
+### 8.3 Verify Observability Data
+
+After the application starts, wait until telemetry appears in Grafana Cloud:
+
+- logs should be visible in **Loki**,
+- traces should be visible in **Tempo**,
+- alert rules should be visible in **Grafana Alerting**.
+
+The demo validation can be performed even when no alert is currently firing. In that case, `--triage` should correctly report that there are no active firing or pending alerts, while targeted log questions can still query Loki and summarize existing error logs.
+
+### 8.4 Clean Up
+
+To remove the demo application from the cluster:
+
+```bash
+skaffold delete
+```
+
 
 ## 9. Demo Description
 
-### 9.1 Execution Procedure
+### 9.1 Demo Goal
 
-The demo follows this end-to-end workflow:
+The goal of the demo was to validate the **OpenAI GPT-based MCP agent** connected to Grafana Cloud. The test confirmed that the agent can:
 
-1. Traffic is continuously generated against Online Boutique by the load generator.
-2. A fault is injected (e.g., `cartservice` scaled to zero).
-3. Grafana Alerting detects elevated error rates and fires alerts.
-4. The system administrator runs the agent in auto-triage or targeted query mode.
-5. The agent queries MCP tools to retrieve alert state, Loki logs, and Tempo traces.
-6. The LLM produces a root-cause analysis with recommended remediation actions.
-7. The administrator reviews the output, applies the fix, and confirms recovery in Grafana.
+1. connect to the Grafana MCP server,
+2. discover available Grafana tools,
+3. call Grafana Alerting tools in `--triage` mode,
+4. query Loki logs for a selected Kubernetes component,
+5. summarize error logs in natural language.
 
-### 9.2 Prompts Used with AI Models
+The demo was executed when the monitored application did not have active application errors or firing alerts. Therefore, the `--triage` command correctly returned that there were no firing or pending alerts. A second test was performed against `kube-apiserver` logs, where errors were visible in Grafana and the agent was expected to find and summarize them.
 
-All prompts are passed to `agent_openai.py`, which connects to Grafana Cloud via the MCP server.
+### 9.2 Auto-Triage Test
 
----
-
-**Prompt 1 — Log Analysis (7-day error patterns)**
-
-```bash
-python agent_openai.py -q "Use Loki datasourceUid=grafanacloud-logs. \
-Analyze logs from the last 7 days for the service/component named 'server'. \
-First discover Loki labels and check likely labels: service_name, app, container, \
-job, pod, namespace, app_kubernetes_io_name. Find the correct selector for 'server'. \
-Then query error-like logs only: error, failed, exception, panic, fatal, timeout, \
-denied, forbidden, unauthorized, refused, unavailable. \
-Return all distinct recurring error patterns with example log lines, timestamps if \
-available, counts if possible, and a short explanation of what each error likely means. \
-Do not ask follow-up questions; make the best effort."
-```
-
-*Purpose:* Discovers what the dominant error patterns have been over the past week, providing historical context before investigating a live alert.
-
----
-
-**Prompt 2 — Traffic Drop Detection**
-
-```bash
-python agent_openai.py -q "Use Tempo datasourceUid=grafanacloud-traces. \
-Analyze trace/span activity from the last 3 hours and determine when system traffic \
-stopped or dropped to near zero. Use span rate or trace volume as the traffic indicator. \
-Answer briefly with the approximate time when traffic ended and mention if any service \
-still had activity afterward."
-```
-
-*Purpose:* Quickly pinpoints the moment the fault took effect by correlating trace volume against time — useful for establishing an incident timeline.
-
----
-
-**Prompt 3 — Active Service Ranking**
-
-```bash
-python agent_openai.py -q "Use Tempo datasourceUid=grafanacloud-traces. \
-Analyze trace/span activity from the last 3 hours. Do not use PromQL syntax. \
-Use TraceQL metrics syntax, for example: \
-  {} | count_over_time() by(resource.service.name) | topk(10), \
-or {} | rate() by(resource.service.name) | topk(10). \
-Use tempo_traceql-metrics-range if possible. \
-Return a short ranked list of the most active services by span volume or span rate."
-```
-
-*Purpose:* Identifies which services are still handling requests during an incident — helps narrow down where the fault is isolated versus where it has cascaded.
-
----
-
-**Prompt 4 — Auto-Triage (all active alerts)**
+The first test used the agent's auto-triage mode:
 
 ```bash
 python agent_openai.py --triage
 ```
 
-Equivalent to sending the following query:
+In this mode, the agent asks Grafana Alerting for currently firing or pending alerts. During the test there were no active alerts, so the expected behavior was a short response explaining that there was nothing to investigate at that moment.
 
-> *"List all currently firing or pending alerts. For each alert, investigate the root cause using relevant Loki logs and Tempo traces. Return sections: ## Alert Summary, ## Root Cause Analysis, ## Recommended Actions."*
+![Auto-triage terminal output](figures/triage.png)
 
-*Purpose:* One-command full incident triage. The agent autonomously fetches all firing alerts, correlates them with logs and traces, and returns a structured actionable report.
+### 9.3 kube-apiserver Log Analysis Test
 
----
+The second test checked whether the agent could inspect Loki logs for `kube-apiserver` and summarize error entries. Before running the agent query, the same log stream was inspected manually in Grafana to confirm that error logs were present.
 
-### 9.3 Expected Agent Output Structure
+![kube-apiserver error logs in Grafana](figures/logs.png)
 
-For `--triage` mode the agent returns a structured Markdown response:
+The targeted agent query was:
 
-```markdown
-## Alert Summary
-- **cartservice-latency** [Firing] — 99th-pct latency 3.4 s (threshold: 2 s) since 14:32 UTC
-- **checkout-5xx-rate** [Firing] — error rate 12 % (threshold: 5 %) since 14:33 UTC
-
-## Root Cause Analysis
-Loki query `{job=~".*cartservice.*"} |= "error"` returns repeated lines:
-  2024-01-15 14:31:58  ERR  dial tcp redis:6379: connect: connection refused
-  2024-01-15 14:31:59  ERR  dial tcp redis:6379: connect: connection refused
-
-The Redis pod (cartservice depends on it for session storage) became unreachable
-at ~14:31 UTC. Tempo span-rate data confirms cartservice span volume dropped to
-zero at 14:32 UTC, while frontend and productcatalogservice remained active.
-
-## Recommended Actions
-1. Check Redis pod status: `kubectl get pod -l app=redis`
-2. Restart if OOMKilled: `kubectl rollout restart deployment/redis`
-3. Review memory limits in `kubernetes-manifests/redis.yaml`
-4. Confirm recovery: re-run `--triage` or check the Grafana alert panel
+```bash
+python agent_openai.py -q "Use Loki datasourceUid=grafanacloud-logs. Analyze kube-apiserver logs from the last 1 hour. Search labels container, job, pod, namespace and service_name for kube-apiserver. Then find error-like messages: error, failed, forbidden, unauthorized, denied, timeout, panic. Summarize recurring patterns."
 ```
 
-### 9.4 Grafana Dashboard Screenshots (to capture during demo)
+The agent used MCP tools to discover Loki labels, query the relevant log stream and return a short summary of the detected error patterns.
 
-The following screenshots should be attached to the results section when presenting the demo:
+![Agent response for kube-apiserver log question](figures/question-about-logs.png)
 
-1. **Overview dashboard** — all services' RED metrics (rate, errors, duration) at baseline
-2. **Alert panel** — firing alerts highlighted in red after fault injection
-3. **Loki Explore** — error log lines for the affected service with timestamps
-4. **Tempo trace waterfall** — a failing checkout request showing the broken span
-5. **Recovery dashboard** — all metrics returning to baseline after remediation
+### 9.4 Interpretation of the Results
 
----
+The demo confirms two important behaviors:
+
+1. **Auto-triage is alert-driven.** If Grafana Alerting has no firing or pending alerts, the agent does not invent an incident. It reports that there is currently no active alert to investigate.
+2. **Targeted log analysis works independently of alerts.** Even when there are no firing alerts, the user can ask a direct question about a service or Kubernetes component. The agent can then use Loki tools through MCP to locate relevant logs and summarize recurring errors.
+
+This demonstrates the practical difference between `--triage` and `-q`:
+
+| Mode | Purpose | Example |
+|---|---|---|
+| `--triage` | Start from active Grafana alerts and investigate them automatically | `python agent_openai.py --triage` |
+| `-q` | Ask a targeted observability question in natural language | `python agent_openai.py -q "Analyze kube-apiserver errors"` |
+
 
 ## 10. Sequence Diagram
 
-The diagram below describes the end-to-end interaction flow for the AI-assisted alert triage scenario, updated to reflect the OpenAI Responses API agent architecture.
+The diagram below reflects the actual behavior of the implemented demo. The user runs the OpenAI-based Python agent from the terminal. The agent exposes Grafana MCP tools to the OpenAI Responses API. When the model decides to use a tool, the Python agent executes that tool through the `mcp-grafana` server over stdio. The MCP server then queries Grafana Cloud resources such as Alerting, Loki and Tempo.
 
-![alt text](figures/demo-diagram.svg)
+![OpenAI MCP agent and Grafana flow](figures/demo-diagram3.svg)
 
----
 
 ## 11. Summary and Conclusions
 
